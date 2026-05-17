@@ -3,6 +3,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import CallbackQuery  # Добавили правильный импорт
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
@@ -20,25 +21,25 @@ def get_main_keyboard():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Бот просто отвечает пользователю, в группу ничего не шлет
     await message.answer(
         "Здравствуйте! Выберите нужную опцию:",
         reply_markup=get_main_keyboard()
     )
 
+# Исправлено: используем CallbackQuery вместо Callback_query
 @dp.callback_query(F.data == "get_scan")
-async def process_scan(callback: types.Callback_query):
+async def process_scan(callback: CallbackQuery):
     await callback.message.answer("Пожалуйста, напишите ваш email")
     await callback.answer()
 
+# Исправлено: используем CallbackQuery вместо Callback_query
 @dp.callback_query(F.data == "upload_file")
-async def process_upload(callback: types.Callback_query):
+async def process_upload(callback: CallbackQuery):
     await callback.message.answer("Пожалуйста, отправьте файл")
     await callback.answer()
 
 @dp.message(F.chat.type == "private")
 async def forward_to_admin(message: types.Message):
-    # Проверка: если пользователь прислал /start в виде текста, игнорируем
     if message.text == "/start":
         return
 
@@ -55,7 +56,6 @@ async def forward_to_admin(message: types.Message):
             print(f"Ошибка создания темы: {e}")
             return
 
-    # Пересылаем только содержательные сообщения (email или файл)
     await bot.copy_message(
         chat_id=ADMIN_GROUP_ID,
         message_thread_id=threads[user_id],

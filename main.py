@@ -3,20 +3,32 @@ import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import CallbackQuery  # Добавили правильный импорт
+from aiogram.types import CallbackQuery
 
+# Настройки
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-threads = {}
+# Хранилище
+threads = {} 
+# Список пользователей, которые выбрали "Получить скан"
+waiting_for_scan_data = set()
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="Получить скан", callback_data="get_scan"))
-    builder.row(types.InlineKeyboardButton(text="Загрузить файл для печати", callback_data="upload_file"))
+    # Кнопка со ссылкой (URL-кнопка)
+    builder.row(types.InlineKeyboardButton(
+        text="Загрузить файл для печати", 
+        url="https://tiny.cc/xrcent")
+    )
+    # Обычная кнопка для взаимодействия
+    builder.row(types.InlineKeyboardButton(
+        text="Получить скан", 
+        callback_data="get_scan")
+    )
     return builder.as_markup()
 
 @dp.message(Command("start"))
@@ -26,16 +38,10 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_keyboard()
     )
 
-# Исправлено: используем CallbackQuery вместо Callback_query
 @dp.callback_query(F.data == "get_scan")
 async def process_scan(callback: CallbackQuery):
+    waiting_for_scan_data.add(callback.from_user.id)
     await callback.message.answer("Пожалуйста, напишите ваш email")
-    await callback.answer()
-
-# Исправлено: используем CallbackQuery вместо Callback_query
-@dp.callback_query(F.data == "upload_file")
-async def process_upload(callback: CallbackQuery):
-    await callback.message.answer("Пожалуйста, отправьте файл")
     await callback.answer()
 
 @dp.message(F.chat.type == "private")
@@ -45,6 +51,7 @@ async def forward_to_admin(message: types.Message):
 
     user_id = message.from_user.id
     
+    # Создаем ветку, если ее еще нет
     if user_id not in threads:
         try:
             topic = await bot.create_forum_topic(
@@ -56,6 +63,7 @@ async def forward_to_admin(message: types.Message):
             print(f"Ошибка создания темы: {e}")
             return
 
+    # Пересылаем сообщение админу
     await bot.copy_message(
         chat_id=ADMIN_GROUP_ID,
         message_thread_id=threads[user_id],
@@ -63,7 +71,11 @@ async def forward_to_admin(message: types.Message):
         message_id=message.message_id
     )
     
-    await message.answer("Пожалуйста, ожидайте.")
+    # Логика ответа: только если пользователь нажал "Получить скан" ранее
+    if user_id in waiting_for_scan_data:
+        await message.answer("Пожалуйста, ожидайте.")
+        # Удаляем из списка ожидания, чтобы не слать это на каждое последующее сообщение
+        waiting_for_scan_data.remove(user_id)
 
 @dp.message(F.chat.id == ADMIN_GROUP_ID)
 async def forward_to_user(message: types.Message):

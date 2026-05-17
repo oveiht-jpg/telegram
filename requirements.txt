@@ -1,2 +1,3 @@
 aiogram
 aiomysql
+cryptography

@@ -99,7 +99,7 @@ async def get_or_create_thread(user: types.User):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "Здравствуйте! Выберите нужную опцию:",
+        "Здравствуйте! Нажмите на кнопку, чтобы запросить скан:",
         reply_markup=get_main_keyboard()
     )
 
@@ -127,7 +127,7 @@ async def process_scan(callback: CallbackQuery):
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"<b>{display_name}</b> ожидает скан",
+            text=f"<b>{display_name}</b> ожидает скан...",
             parse_mode="HTML"
         )
         

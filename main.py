@@ -110,7 +110,7 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "get_scan")
 async def process_scan(callback: CallbackQuery):
     # Сразу отвечаем пользователю
-    await callback.message.answer("Пожалуйста, ожидайте.")
+    await callback.message.answer("Скан будет направлен на указанный вами email в ближайшее время.")
     await callback.answer()
 
     # Уведомляем админа в соответствующем топике
@@ -119,7 +119,7 @@ async def process_scan(callback: CallbackQuery):
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"🔔 Пользователь выбрал опцию: **Получить скан**"
+            text=f"🔔 Пользователь ожидает скан"
         )
 
 @dp.message(F.chat.type == "private")

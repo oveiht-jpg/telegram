@@ -98,7 +98,7 @@ async def get_or_create_thread(user: types.User):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "Здравствуйте! Нажмите на кнопку, чтобы запросить скан:»,
+        "Здравствуйте! Нажмите на кнопку, чтобы запросить скан:",
         reply_markup=get_main_keyboard()
     )
 

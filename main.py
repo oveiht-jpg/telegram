@@ -110,16 +110,22 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "get_scan")
 async def process_scan(callback: CallbackQuery):
     # Сразу отвечаем пользователю
-    await callback.message.answer("Скан будет направлен на указанный вами email в ближайшее время.")
+    await callback.message.answer("Пожалуйста, ожидайте.")
     await callback.answer()
 
+    # Получаем данные пользователя для уведомления
+    user = callback.from_user
+    # Если есть никнейм, пишем его, если нет — только имя
+    user_identity = f"@{user.full_name}"
+
     # Уведомляем админа в соответствующем топике
-    thread_id = await get_or_create_thread(callback.from_user)
+    thread_id = await get_or_create_thread(user)
     if thread_id:
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"🔔 Пользователь ожидает скан"
+            text=f"🔔 **{user_identity}** ожидает скан",
+            parse_mode="Markdown" # Чтобы никнейм выделился жирным
         )
 
 @dp.message(F.chat.type == "private")

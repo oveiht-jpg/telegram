@@ -1,3 +1,4 @@
+import html # Убедитесь, что этот импорт есть в самом верху
 import os
 import asyncio
 import urllib.parse
@@ -109,25 +110,32 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "get_scan")
 async def process_scan(callback: CallbackQuery):
-    # Сразу отвечаем пользователю
+    # 1. Отвечаем пользователю
     await callback.message.answer("Пожалуйста, ожидайте.")
     await callback.answer()
 
-    # Получаем данные пользователя для уведомления
+    # 2. Формируем строку с данными пользователя
     user = callback.from_user
-    # Если есть никнейм, пишем его, если нет — только имя
-    user_identity = f"@{user.full_name}"
+    full_name = html.escape(user.full_name)
+    
+    if user.username:
+        # Если есть никнейм: Имя Фамилия (@nickname)
+        username_escaped = html.escape(user.username)
+        display_name = f"{full_name} (@{username_escaped})"
+    else:
+        # Если никнейма нет: Имя Фамилия
+        display_name = full_name
 
-    # Уведомляем админа в соответствующем топике
+    # 3. Отправляем уведомление в топик (жирным шрифтом)
     thread_id = await get_or_create_thread(user)
     if thread_id:
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"🔔 **{user_identity}** ожидает скан",
-            parse_mode="Markdown" # Чтобы никнейм выделился жирным
+            text=f"🔔 <b>{display_name}</b> ожидает скан",
+            parse_mode="HTML"
         )
-
+        
 @dp.message(F.chat.type == "private")
 async def forward_to_admin(message: types.Message):
     if message.text == "/start":

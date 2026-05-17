@@ -68,11 +68,6 @@ async def get_user_id_by_thread(thread_id):
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
-    # Кнопка-ссылка
-    builder.row(types.InlineKeyboardButton(
-        text="Загрузить файл для печати", 
-        url="https://tiny.cc/xrcent")
-    )
     # Кнопка обратной связи
     builder.row(types.InlineKeyboardButton(
         text="Получить скан", 
@@ -132,7 +127,7 @@ async def process_scan(callback: CallbackQuery):
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"🔔 <b>{display_name}</b> ожидает скан",
+            text=f"<b>{display_name}</b> ожидает скан",
             parse_mode="HTML"
         )
         

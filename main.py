@@ -72,25 +72,27 @@ def get_main_keyboard():
     return builder.as_markup()
 
 async def get_or_create_thread(user: types.User):
-    """Находит существующий топик или создает новый: Имя Фамилия (@nickname)"""
     thread_id = await get_thread_from_db(user.id)
     
+    if thread_id:
+        try:
+            # Проверяем, существует ли топик, отправив "невидимое" действие (печать)
+            await bot.send_chat_action(chat_id=ADMIN_GROUP_ID, action="typing", message_thread_id=thread_id)
+        except Exception:
+            # Если ошибка (топик удален), стираем ID из базы
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute('DELETE FROM threads WHERE user_id = %s', (user.id,))
+            thread_id = None 
+
     if not thread_id:
         try:
-            # Формируем название топика (без HTML-тегов, просто текст)
-            topic_name = user.full_name
-            if user.username:
-                topic_name += f" (@{user.username})"
-            
-            # Создаем топик в группе
+            topic_name = f"{user.full_name}" + (f" (@{user.username})" if user.username else "")
             topic = await bot.create_forum_topic(chat_id=ADMIN_GROUP_ID, name=topic_name)
             thread_id = topic.message_thread_id
-            
-            # Сохраняем в MySQL
             await save_thread_to_db(user.id, thread_id)
-            print(f"DEBUG: Создан топик {thread_id} для {topic_name}")
         except Exception as e:
-            print(f"DEBUG ERROR: Ошибка создания топика: {e}")
+            print(f"Ошибка создания топика: {e}")
             return None
     return thread_id
 

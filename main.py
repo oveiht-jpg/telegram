@@ -9,6 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import CallbackQuery
 
 # --- НАСТРОЙКИ ---
+# Убедитесь, что в Railway заданы эти переменные (Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -22,7 +23,6 @@ pool = None
 
 async def init_db():
     global pool
-    # Безопасный разбор URL для подключения к базе
     url = urllib.parse.urlparse(DATABASE_URL)
     
     pool = await aiomysql.create_pool(
@@ -34,7 +34,6 @@ async def init_db():
         autocommit=True
     )
     
-    # Создаем таблицу для хранения связей Юзер <-> Топик
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute('''
@@ -68,37 +67,40 @@ async def get_user_id_by_thread(thread_id):
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="Загрузить файл для печати", url="https://tiny.cc/xrcent"))
     builder.row(types.InlineKeyboardButton(text="Получить скан", callback_data="get_scan"))
     return builder.as_markup()
 
 async def get_or_create_thread(user: types.User):
-    """Находит или создает топик с форматом: Имя Фамилия (@nickname)"""
+    """Находит существующий топик или создает новый: Имя Фамилия (@nickname)"""
     thread_id = await get_thread_from_db(user.id)
     
     if not thread_id:
         try:
-            # Формируем красивое название топика
+            # Формируем название топика (без HTML-тегов, просто текст)
             topic_name = user.full_name
             if user.username:
                 topic_name += f" (@{user.username})"
             
-            # Создаем топик в админ-группе
+            # Создаем топик в группе
             topic = await bot.create_forum_topic(chat_id=ADMIN_GROUP_ID, name=topic_name)
             thread_id = topic.message_thread_id
             
             # Сохраняем в MySQL
             await save_thread_to_db(user.id, thread_id)
+            print(f"DEBUG: Создан топик {thread_id} для {topic_name}")
         except Exception as e:
-            print(f"Ошибка создания топика: {e}")
+            print(f"DEBUG ERROR: Ошибка создания топика: {e}")
             return None
     return thread_id
 
-# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
+# --- ОБРАБОТЧИКИ ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Исправлено: кавычки теперь стандартные
     await message.answer(
-        "Здравствуйте! Нажмите на кнопку, чтобы запросить скан:",
+        "Здравствуйте! Выберите нужную опцию:",
         reply_markup=get_main_keyboard()
     )
 
@@ -108,27 +110,36 @@ async def process_scan(callback: CallbackQuery):
     await callback.answer()
 
     user = callback.from_user
-    # Формируем имя для уведомления: Имя Фамилия (@никнейм)
+    # Формируем имя для уведомления с защитой от спецсимволов
     display_name = html.escape(user.full_name)
     if user.username:
         display_name += f" (@{html.escape(user.username)})"
 
     thread_id = await get_or_create_thread(user)
+    
+    # Отправляем уведомление именно в топик пользователя
     if thread_id:
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=thread_id,
-            text=f"<b>{display_name}</b> ожидает скан…",
+            text=f"🔔 <b>{display_name}</b> ожидает скан",
             parse_mode="HTML"
+        )
+    else:
+        # Резервный вариант, если топик не создался
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=f"🔔 <b>{display_name}</b> ожидает скан (ошибка создания топика)"
         )
 
 @dp.message(F.chat.type == "private")
 async def forward_to_admin(message: types.Message):
-    """Пересылка сообщений от пользователя админам"""
+    """Пересылка из ЛС в топик админ-группы"""
     if message.text == "/start":
         return
 
     thread_id = await get_or_create_thread(message.from_user)
+    
     if thread_id:
         await bot.copy_message(
             chat_id=ADMIN_GROUP_ID,
@@ -136,10 +147,18 @@ async def forward_to_admin(message: types.Message):
             from_chat_id=message.chat.id,
             message_id=message.message_id
         )
+    else:
+        # Если топик не определен, шлем в General
+        await bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
+        )
 
 @dp.message(F.chat.id == ADMIN_GROUP_ID)
 async def forward_to_user(message: types.Message):
-    """Ответ админа из топика пользователю в ЛС"""
+    """Ответ админа из топика обратно пользователю"""
+    # Если сообщение написано в General (нет thread_id), игнорируем
     if not message.message_thread_id:
         return
 
@@ -152,13 +171,13 @@ async def forward_to_user(message: types.Message):
                 message_id=message.message_id
             )
         except Exception as e:
-            print(f"Ошибка пересылки: {e}")
+            print(f"DEBUG ERROR: Не удалось отправить ответ пользователю {user_id}: {e}")
 
 # --- ЗАПУСК ---
 
 async def main():
     await init_db()
-    # Удаляем вебхуки и запускаем поллинг
+    # Очищаем очередь обновлений и запускаем бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

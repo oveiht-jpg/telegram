@@ -9,7 +9,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import CallbackQuery
 
 # --- НАСТРОЙКИ ---
-# Убедитесь, что в Railway заданы эти переменные (Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -63,23 +62,26 @@ async def get_user_id_by_thread(thread_id):
             result = await cur.fetchone()
             return result[0] if result else None
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-
-def get_main_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="Загрузить файл для печати", url="https://tiny.cc/xrcent"))
-    builder.row(types.InlineKeyboardButton(text="Получить скан", callback_data="get_scan"))
-    return builder.as_markup()
+# --- ЛОГИКА ТОПИКОВ ---
 
 async def get_or_create_thread(user: types.User):
+    """
+    Находит топик в базе. Если он был удален в Telegram — 
+    чистит базу и создает новый.
+    """
     thread_id = await get_thread_from_db(user.id)
     
     if thread_id:
         try:
-            # Проверяем, существует ли топик, отправив "невидимое" действие (печать)
-            await bot.send_chat_action(chat_id=ADMIN_GROUP_ID, action="typing", message_thread_id=thread_id)
+            # Проверяем "живучесть" топика отправкой статуса "печатает"
+            await bot.send_chat_action(
+                chat_id=ADMIN_GROUP_ID, 
+                action="typing", 
+                message_thread_id=thread_id
+            )
         except Exception:
-            # Если ошибка (топик удален), стираем ID из базы
+            # Если топик не найден (удален пользователем), удаляем его из БД
+            print(f"Топик {thread_id} для {user.id} не найден. Сбрасываю...")
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute('DELETE FROM threads WHERE user_id = %s', (user.id,))
@@ -87,20 +89,35 @@ async def get_or_create_thread(user: types.User):
 
     if not thread_id:
         try:
-            topic_name = f"{user.full_name}" + (f" (@{user.username})" if user.username else "")
+            # Формируем название: Имя Фамилия (@nickname)
+            topic_name = user.full_name
+            if user.username:
+                topic_name += f" (@{user.username})"
+            
+            # Создаем топик в админ-группе
             topic = await bot.create_forum_topic(chat_id=ADMIN_GROUP_ID, name=topic_name)
             thread_id = topic.message_thread_id
+            
+            # Сохраняем новую связку в MySQL
             await save_thread_to_db(user.id, thread_id)
         except Exception as e:
-            print(f"Ошибка создания топика: {e}")
+            print(f"Ошибка при создании топика: {e}")
             return None
+            
     return thread_id
+
+# --- КЛАВИАТУРА ---
+
+def get_main_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="Загрузить файл для печати", url="https://tiny.cc/xrcent"))
+    builder.row(types.InlineKeyboardButton(text="Получить скан", callback_data="get_scan"))
+    return builder.as_markup()
 
 # --- ОБРАБОТЧИКИ ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Исправлено: кавычки теперь стандартные
     await message.answer(
         "Здравствуйте! Выберите нужную опцию:",
         reply_markup=get_main_keyboard()
@@ -112,14 +129,12 @@ async def process_scan(callback: CallbackQuery):
     await callback.answer()
 
     user = callback.from_user
-    # Формируем имя для уведомления с защитой от спецсимволов
     display_name = html.escape(user.full_name)
     if user.username:
         display_name += f" (@{html.escape(user.username)})"
 
     thread_id = await get_or_create_thread(user)
     
-    # Отправляем уведомление именно в топик пользователя
     if thread_id:
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -128,15 +143,14 @@ async def process_scan(callback: CallbackQuery):
             parse_mode="HTML"
         )
     else:
-        # Резервный вариант, если топик не создался
+        # Резервный канал (General)
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            text=f"🔔 <b>{display_name}</b> ожидает скан (ошибка создания топика)"
+            text=f"🔔 <b>{display_name}</b> ожидает скан (ошибка топика)"
         )
 
 @dp.message(F.chat.type == "private")
 async def forward_to_admin(message: types.Message):
-    """Пересылка из ЛС в топик админ-группы"""
     if message.text == "/start":
         return
 
@@ -150,7 +164,7 @@ async def forward_to_admin(message: types.Message):
             message_id=message.message_id
         )
     else:
-        # Если топик не определен, шлем в General
+        # Если создать топик не удалось, шлем в общую ветку
         await bot.copy_message(
             chat_id=ADMIN_GROUP_ID,
             from_chat_id=message.chat.id,
@@ -159,8 +173,6 @@ async def forward_to_admin(message: types.Message):
 
 @dp.message(F.chat.id == ADMIN_GROUP_ID)
 async def forward_to_user(message: types.Message):
-    """Ответ админа из топика обратно пользователю"""
-    # Если сообщение написано в General (нет thread_id), игнорируем
     if not message.message_thread_id:
         return
 
@@ -173,13 +185,12 @@ async def forward_to_user(message: types.Message):
                 message_id=message.message_id
             )
         except Exception as e:
-            print(f"DEBUG ERROR: Не удалось отправить ответ пользователю {user_id}: {e}")
+            print(f"Не удалось ответить пользователю: {e}")
 
 # --- ЗАПУСК ---
 
 async def main():
     await init_db()
-    # Очищаем очередь обновлений и запускаем бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

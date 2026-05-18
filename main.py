@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-# Конфигурация
+# --- КОНФИГУРАЦИЯ ---
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -25,79 +25,120 @@ async def init_db():
         async with conn.cursor() as cur:
             await cur.execute('CREATE TABLE IF NOT EXISTS threads (user_id BIGINT PRIMARY KEY, thread_id BIGINT)')
 
-async def get_valid_thread(user: types.User):
-    """Проверяет топик на реальное существование."""
+async def get_or_create_thread(user: types.User):
+    """
+    1000% надежный метод получения топика.
+    Проверяет топик через попытку изменения заголовка.
+    """
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute('SELECT thread_id FROM threads WHERE user_id = %s', (user.id,))
             res = await cur.fetchone()
             thread_id = res[0] if res else None
 
+    # Если ID есть в базе, проверяем его на реальность
     if thread_id:
         try:
-            # Если топик удален, этот вызов выдаст TelegramBadRequest
-            await bot.get_chat(chat_id=ADMIN_GROUP_ID) 
-            await bot.send_chat_action(chat_id=ADMIN_GROUP_ID, action="typing", message_thread_id=thread_id)
+            # Пытаемся "тронуть" топик. Если он удален, это вызовет ошибку.
+            name = f"{user.full_name}"
+            await bot.edit_forum_topic(ADMIN_GROUP_ID, thread_id, name=name[:120])
         except Exception:
-            # Если хоть что-то пошло не так — забываем этот ID
+            # Топик мертв. Удаляем из базы.
+            thread_id = None
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute('DELETE FROM threads WHERE user_id = %s', (user.id,))
-            thread_id = None
 
+    # Если топика нет или он был удален — создаем с нуля
     if not thread_id:
         try:
-            topic = await bot.create_forum_topic(ADMIN_GROUP_ID, f"{user.full_name}")
-            thread_id = topic.message_thread_id
+            topic_name = f"{user.full_name}" + (f" (@{user.username})" if user.username else "")
+            new_topic = await bot.create_forum_topic(ADMIN_GROUP_ID, topic_name[:120])
+            thread_id = new_topic.message_thread_id
+            
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
-                    await cur.execute('INSERT INTO threads (user_id, thread_id) VALUES (%s, %s)', (user.id, thread_id))
+                    await cur.execute(
+                        'INSERT INTO threads (user_id, thread_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE thread_id=%s',
+                        (user.id, thread_id, thread_id)
+                    )
         except Exception as e:
-            print(f"Критическая ошибка создания темы: {e}")
+            print(f"CRITICAL ERROR: Не удалось создать топик: {e}")
             return None
+
     return thread_id
+
+# --- ОБРАБОТЧИКИ ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardBuilder()
     kb.row(types.InlineKeyboardButton(text="📥 Загрузить файл", url="https://tiny.cc/xrcent"))
     kb.row(types.InlineKeyboardButton(text="📄 Получить скан", callback_data="get_scan"))
-    await m.answer(f"Привет, {m.from_user.first_name}!", reply_markup=kb.as_markup())
+    
+    await m.answer(
+        f"Здравствуйте, {m.from_user.first_name}! 👋\nНапишите ваш вопрос или выберите опцию:",
+        reply_markup=kb.as_markup()
+    )
 
 @dp.callback_query(F.data == "get_scan")
-async def process_scan(cb: types.CallbackQuery): # Название из вашего лога
+async def process_scan(cb: types.CallbackQuery):
     await cb.answer()
-    tid = await get_valid_thread(cb.from_user)
+    tid = await get_or_create_thread(cb.from_user)
     if tid:
+        # Шлем сообщение ТОЛЬКО если есть валидный tid
         try:
-            await bot.send_message(ADMIN_GROUP_ID, f"🔔 Скан от {html.escape(cb.from_user.full_name)}", message_thread_id=tid)
-            await cb.message.answer("Запрос отправлен.")
-        except Exception:
-            await cb.message.answer("Ошибка. Попробуйте еще раз.")
+            await bot.send_message(
+                ADMIN_GROUP_ID, 
+                f"🔔 Пользователь <b>{html.escape(cb.from_user.full_name)}</b> запросил скан.",
+                message_thread_id=tid,
+                parse_mode="HTML"
+            )
+            await cb.message.answer("Запрос отправлен администратору.")
+        except TelegramBadRequest:
+            # Если все же проскочила ошибка темы — пробуем еще раз с принудительным пересозданием
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute('DELETE FROM threads WHERE user_id = %s', (cb.from_user.id,))
+            # Рекурсивно пробуем еще раз (сработает создание нового)
+            return await process_scan(cb)
 
 @dp.message(F.chat.type == "private")
-async def to_admin(m: types.Message):
+async def to_admin_forward(m: types.Message):
     if m.text == "/start": return
-    tid = await get_valid_thread(m.from_user)
+    
+    tid = await get_or_create_thread(m.from_user)
     if tid:
         try:
             await bot.copy_message(ADMIN_GROUP_ID, m.chat.id, m.message_id, message_thread_id=tid)
-        except:
-            pass
+        except TelegramBadRequest:
+            # Если тема не найдена прямо в момент отправки
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute('DELETE FROM threads WHERE user_id = %s', (m.from_user.id,))
+            new_tid = await get_or_create_thread(m.from_user)
+            await bot.copy_message(ADMIN_GROUP_ID, m.chat.id, m.message_id, message_thread_id=new_tid)
 
 @dp.message(F.chat.id == ADMIN_GROUP_ID)
-async def from_admin(m: types.Message):
-    if not m.message_thread_id: return
+async def from_admin_reply(m: types.Message):
+    # Игнорируем General (thread_id=None или 1 в некоторых случаях)
+    if not m.message_thread_id or m.message_thread_id == 1:
+        return
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute('SELECT user_id FROM threads WHERE thread_id = %s', (m.message_thread_id,))
             res = await cur.fetchone()
             if res:
-                try: await bot.copy_message(res[0], ADMIN_GROUP_ID, m.message_id)
-                except: pass
+                try:
+                    await bot.copy_message(res[0], ADMIN_GROUP_ID, m.message_id)
+                except Exception:
+                    pass
 
+# --- ЗАПУСК ---
 async def main():
     await init_db()
+    # Сбрасываем очередь сообщений, чтобы не захлебнуться старыми ошибками
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

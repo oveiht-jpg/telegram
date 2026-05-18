@@ -77,7 +77,7 @@ async def cmd_start(m: types.Message):
     kb.row(types.InlineKeyboardButton(text="📄 Получить скан", callback_data="get_scan"))
     
     await m.answer(
-        f"Здравствуйте, {m.from_user.first_name}! 👋\nНапишите ваш вопрос или выберите опцию:",
+        f"Здравствуйте, {m.from_user.first_name}! 👋\nПожалуйста, выберите опцию:",
         reply_markup=kb.as_markup()
     )
 

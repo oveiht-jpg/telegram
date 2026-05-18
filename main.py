@@ -73,7 +73,7 @@ async def get_or_create_thread(user: types.User):
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardBuilder()
-    kb.row(types.InlineKeyboardButton(text="📥 Загрузить файл", url="https://tiny.cc/xrcent"))
+    kb.row(types.InlineKeyboardButton(text="📥 Загрузить файл", url="clck.ru/3ThXvR"))
     kb.row(types.InlineKeyboardButton(text="📄 Получить скан", callback_data="get_scan"))
     
     await m.answer(
